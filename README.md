@@ -1,149 +1,179 @@
 # LaptopAccelRotate
 
-Автоповорот экрана для планшетов и ноутбуков-трансформеров под Windows, у которых
-штатный автоповорот не работает, хотя акселерометр исправен.
+**English** · [Русский](README.ru.md)
 
-Программа сама читает датчик и поворачивает **только встроенную панель** — внешние
-мониторы остаются как были.
+<p align="center">
+  <img src="docs/ninkear-t40.png" alt="Ninkear T40 (2024)" width="520">
+</p>
 
-> **EN:** Screen auto-rotation for Windows tablets/convertibles where the built-in
-> rotation service is broken but the accelerometer still reports data. Rotates only
-> the internal panel, never the external monitors. Single-file C#, no dependencies.
+<p align="center">
+  <sub>Ninkear T40 (2024) — the convertible this was written and debugged on.<br>
+  Image is the manufacturer's promotional photo.</sub>
+</p>
+
+Screen auto-rotation for Windows tablets and convertibles whose built-in rotation
+stopped working even though the accelerometer is perfectly fine.
+
+The program reads the sensor itself and rotates **only the internal panel** — external
+monitors stay exactly as they were.
 
 ---
 
-## Зачем это нужно
+## Why this exists
 
-Типичная поломка после переустановки Windows: в системе нет драйвера сенсорного хаба,
-который связывает акселерометр с подсистемой автоповорота. При этом сам датчик работает
-и честно отдаёт данные — проверить можно так:
+A classic breakage after reinstalling Windows: the system is missing the sensor-hub
+driver that connects the accelerometer to the rotation subsystem. The sensor itself
+still works and happily reports data — check it like this:
 
 ```powershell
 [void][Windows.Devices.Sensors.Accelerometer, Windows.Devices.Sensors, ContentType = WindowsRuntime]
 [Windows.Devices.Sensors.Accelerometer]::GetDefault().GetCurrentReading()
 ```
 
-Если эта команда возвращает `AccelerationX/Y/Z`, а экран не крутится — эта программа
-закроет дыру: она берёт данные напрямую из WinRT и поворачивает экран через WinAPI.
+If that returns `AccelerationX/Y/Z` but the screen never rotates, this program fills the
+gap: it pulls the data straight from WinRT and rotates the display through the Win32 API.
 
-Проверено на ноутбуке-трансформере на Intel N100 с отстёгивающейся Bluetooth-клавиатурой.
+### Tested hardware
 
-## Что умеет
+The specific machine this was built for is a **Ninkear T40 (2024)**:
 
-- Автоповорот по акселерометру, с подавлением дребезга.
-- **Поворачивает именно встроенную панель**, а не «основной» экран. Это принципиально:
-  если внешний монитор назначен основным, наивная реализация крутит его, а не ноутбук.
-- Ручной выбор экрана в интерфейсе, если автоопределение вдруг промахнётся.
-- Отслеживает подключение и отключение мониторов (`WM_DISPLAYCHANGE`).
-- Переключатель «поменять лево и право» — для матриц, установленных зеркально.
-- Автозапуск при входе в Windows, работа из системного трея.
-- Ручной поворот из окна, когда автоповорот выключен.
-- Права администратора не нужны.
+| | |
+|---|---|
+| CPU | Intel N100 |
+| Form factor | tablet with a magnetically detachable Bluetooth keyboard |
+| Display | 2K internal panel, enumerated as `\\.\DISPLAY1` |
+| Sensor | accelerometer reachable via WinRT, but no sensor-hub driver |
 
-## Как это работает
+Auto-rotation worked on the factory Windows install. After a clean reinstall the chip
+driver never came back, so the built-in rotation disappeared — while the accelerometer
+kept reporting data just fine. This program replaces the missing link.
 
-Две части:
+The code knows nothing about this particular model and should work on any Windows tablet
+or convertible with a WinRT-accessible accelerometer.
 
-1. **Фоновый процесс** — `powershell.exe` со скриптом `worker.ps1`, который программа сама
-   раскладывает в `%LOCALAPPDATA%\AutoRotate\`. Скрипт делает ровно одну вещь: читает
-   `Windows.Devices.Sensors.Accelerometer` и печатает `X;Y;Z` в стандартный вывод.
-   PowerShell нужен только потому, что через него проще всего добраться до WinRT API
-   без сторонних библиотек.
+## Features
 
-2. **Основное приложение** (`AutoRotate.exe`) — читает этот поток и решает, что делать.
-   Вся логика поворота живёт здесь и только здесь.
+- Accelerometer-driven auto-rotation with debouncing.
+- **Rotates the internal panel, not the "primary" display.** This is the whole point: if
+  an external monitor is set as primary, a naive implementation rotates the monitor
+  instead of the laptop screen.
+- Manual display override in the UI, in case detection ever guesses wrong.
+- Tracks monitors being plugged and unplugged (`WM_DISPLAYCHANGE`).
+- "Swap left and right" toggle, for panels mounted mirrored.
+- Starts with Windows, lives in the system tray.
+- Manual rotation from the window while auto-rotation is off.
+- No administrator rights required.
 
-### Выбор экрана
+## How it works
 
-Ключевой момент. `EnumDisplayDevices` умеет сказать только «этот экран основной», но не
-«этот экран встроенный». Поэтому встроенная панель ищется через CCD API
-(`QueryDisplayConfig` + `DisplayConfigGetDeviceInfo`) по типу видеовыхода:
+Two parts:
 
-| Константа | Значение |
+1. **Background process** — `powershell.exe` running `worker.ps1`, which the program drops
+   into `%LOCALAPPDATA%\AutoRotate\` itself. The script does exactly one thing: read
+   `Windows.Devices.Sensors.Accelerometer` and print `X;Y;Z` to standard output.
+   PowerShell is used only because it's the shortest path to the WinRT API without
+   pulling in third-party libraries.
+
+2. **Main application** (`AutoRotate.exe`) — reads that stream and decides what to do.
+   All rotation logic lives here and nowhere else.
+
+### Picking the display
+
+This is the crux. `EnumDisplayDevices` can only tell you "this display is primary", never
+"this display is internal". So the built-in panel is located through the CCD API
+(`QueryDisplayConfig` + `DisplayConfigGetDeviceInfo`) by video output technology:
+
+| Constant | Value |
 |---|---|
 | `DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL` | `0x80000000` |
 | `DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED` | `11` |
 | `DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED` | `13` |
 
-Найденный target сопоставляется с GDI-именем вида `\\.\DISPLAY1`, и поворот
-через `ChangeDisplaySettingsEx` адресуется строго этому устройству.
+The matching target is mapped back to its GDI name (`\\.\DISPLAY1`), and the
+`ChangeDisplaySettingsEx` call is addressed strictly to that device.
 
-Если встроенной панели нет (например, на настольном ПК), программа откатывается
-на основной экран.
+If there is no internal panel at all (a desktop PC, say), the program falls back to the
+primary display.
 
-### Определение ориентации
+### Determining orientation
 
-Из показаний акселерометра:
+From the accelerometer readings:
 
-- `|Z| > 0.88` — устройство лежит плашмя, ориентацию определить нельзя, поворот не трогаем.
-- `Y < -0.55` — альбомная, `Y > 0.55` — альбомная перевёрнутая.
-- `X < -0.55` и `X > 0.55` — книжные ориентации; какая именно, зависит от галки
-  «поменять лево и право».
+- `|Z| > 0.88` — the device is lying flat, orientation is undefined, rotation is left alone.
+- `Y < -0.55` — landscape, `Y > 0.55` — landscape flipped.
+- `X < -0.55` and `X > 0.55` — portrait orientations; which one depends on the
+  "swap left and right" setting.
 
-Поворот применяется только после двух подряд одинаковых отсчётов — иначе экран
-дёргался бы на каждом случайном наклоне.
+A rotation is only applied after two consecutive matching readings — otherwise the screen
+would flip on every accidental tilt.
 
-## Сборка
+## Building
 
-Нужен только .NET Framework 4, который есть в Windows из коробки. Никаких NuGet,
-Visual Studio и внешних зависимостей.
+All you need is .NET Framework 4, which ships with Windows. No NuGet, no Visual Studio,
+no external dependencies.
 
 ```bash
 build.bat
 ```
 
-Батник сам находит `csc.exe` и собирает `AutoRotate.exe` с иконкой. Либо вручную:
+The batch file locates `csc.exe` on its own and builds `AutoRotate.exe` with the icon.
+Or by hand:
 
 ```bash
 %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /optimize+ /out:AutoRotate.exe /win32icon:AutoRotate.ico /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll AutoRotate.cs
 ```
 
-## Использование
+## Usage
 
-Запусти `AutoRotate.exe` двойным кликом и нажми «Включить».
+Double-click `AutoRotate.exe` and press "Включить" (Enable).
 
-- Закрытие окна сворачивает программу в трей, она продолжает работать.
-- Выход — через контекстное меню значка в трее.
-- Галка «Запускать при входе в Windows» добавляет программу в автозапуск с ключом
-  `/auto` — она стартует свёрнутой и сразу включает слежение.
+- Closing the window minimizes the program to the tray; it keeps running.
+- Quit through the tray icon's context menu.
+- The "start with Windows" checkbox registers the program with the `/auto` switch, so it
+  launches minimized and starts watching immediately.
 
-Ключ командной строки:
+Command-line switch:
 
-| Ключ | Действие |
+| Switch | Effect |
 |---|---|
-| `/auto` | Сразу включить автоповорот и свернуться в трей |
+| `/auto` | Enable auto-rotation immediately and minimize to tray |
 
-## Настройки
+> The user interface is in Russian. If you need it in English, the strings are all plain
+> literals in `AutoRotate.cs` — search for `"Автоповорот"` and work outwards.
 
-Хранятся в `HKEY_CURRENT_USER\Software\AutoRotate`:
+## Settings
 
-| Значение | Тип | Смысл |
+Stored under `HKEY_CURRENT_USER\Software\AutoRotate`:
+
+| Value | Type | Meaning |
 |---|---|---|
-| `Swap` | DWORD | `1` — поменять лево и право местами (по умолчанию) |
-| `Screen` | String | Имя экрана, например `\\.\DISPLAY1`. Пусто — определять встроенный автоматически |
+| `Swap` | DWORD | `1` — swap left and right (default) |
+| `Screen` | String | Display name, e.g. `\\.\DISPLAY1`. Empty — detect the internal panel automatically |
 
-Автозапуск — `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`, значение `AutoRotate`.
+Autostart lives in `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`,
+value `AutoRotate`.
 
-## Если не работает
+## Troubleshooting
 
-- **Экран не крутится вообще.** Проверь «Блокировку вращения» в Параметрах → Система → Экран.
-- **В окне написано «ДАТЧИК НЕ ОТВЕЧАЕТ».** Акселерометр недоступен из WinRT, проверь
-  командой из раздела «Зачем это нужно».
-- **Крутится не в ту сторону.** Сними или поставь галку «Поменять лево и право».
-- **Крутится не тот экран.** Выбери нужный вручную в выпадающем списке «Экран».
+- **Nothing rotates at all.** Check Rotation lock in Settings → System → Display.
+- **The window says "ДАТЧИК НЕ ОТВЕЧАЕТ" (sensor not responding).** The accelerometer is
+  unreachable from WinRT; verify with the command in "Why this exists".
+- **It rotates the wrong way.** Toggle "Поменять лево и право" (swap left and right).
+- **It rotates the wrong display.** Pick the right one manually in the "Экран" dropdown.
 
-## Ограничения
+## Limitations
 
-- В режиме **дублирования** экранов повернётся всё сразу. У Windows в этом режиме один
-  источник на оба выхода, обойти это нельзя.
-- Акселерометр опрашивается по таймеру (каждые 300 мс), а не по событию — так проще
-  и надёжнее, но реакция не мгновенная.
+- In **mirrored** (duplicate) display mode everything rotates at once. Windows drives both
+  outputs from a single source in that mode, and there's no way around it.
+- The accelerometer is polled on a timer (every 300 ms) rather than event-driven — simpler
+  and more reliable, but the response isn't instant.
 
-## Файлы
+## Files
 
-| Файл | Что это |
+| File | What it is |
 |---|---|
-| `AutoRotate.cs` | Весь исходный код, один файл |
-| `AutoRotate.ico` | Иконка приложения и трея |
-| `build.bat` | Сборка штатным компилятором Windows |
-| `_backup/` | Предыдущая версия, в репозиторий не попадает |
+| `AutoRotate.cs` | The entire source, one file |
+| `AutoRotate.ico` | Application and tray icon |
+| `build.bat` | Build with the compiler already in Windows |
+| `docs/` | README images |
+| `_backup/` | Previous version, not committed |
