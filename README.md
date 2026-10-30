@@ -176,4 +176,3 @@ value `AutoRotate`.
 | `AutoRotate.ico` | Application and tray icon |
 | `build.bat` | Build with the compiler already in Windows |
 | `docs/` | README images |
-| `_backup/` | Previous version, not committed |
