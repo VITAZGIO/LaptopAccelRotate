@@ -1,0 +1,12 @@
+# Результат сборки
+*.exe
+*.pdb
+
+# Локальные бэкапы
+_backup/
+*.bak
+*.old.*
+
+# Мусор Windows
+Thumbs.db
+desktop.ini
